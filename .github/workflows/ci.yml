@@ -2,7 +2,7 @@ name: CI - Lint, Test & Validate
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, staging]
 
 permissions:
   contents: read

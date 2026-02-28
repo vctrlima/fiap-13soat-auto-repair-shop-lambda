@@ -19,10 +19,12 @@ terraform {
 
   backend "s3" {
     bucket         = "auto-repair-shop-terraform-state"
-    key            = "lambda-infrastructure/terraform.tfstate"
     region         = "us-east-2"
     dynamodb_table = "auto-repair-shop-terraform-locks"
     encrypt        = true
+    # key is passed dynamically via -backend-config in CI/CD:
+    # staging:    key = "lambda-infrastructure/staging/terraform.tfstate"
+    # production: key = "lambda-infrastructure/production/terraform.tfstate"
   }
 }
 
@@ -61,9 +63,9 @@ data "terraform_remote_state" "k8s" {
 # -----------------------------------------------------------------------------
 
 resource "aws_security_group" "lambda" {
-  name_prefix = "${var.project_name}-lambda-auth-"
+  name_prefix = "${var.project_name}-${var.environment}-lambda-auth-"
   vpc_id      = data.terraform_remote_state.k8s.outputs.vpc_id
-  description = "Security group for authentication Lambda function"
+  description = "Security group for ${var.environment} authentication Lambda function"
 
   egress {
     from_port   = 0
@@ -74,7 +76,7 @@ resource "aws_security_group" "lambda" {
   }
 
   tags = {
-    Name = "${var.project_name}-lambda-auth-sg"
+    Name = "${var.project_name}-${var.environment}-lambda-auth-sg"
   }
 
   lifecycle {
@@ -87,7 +89,7 @@ resource "aws_security_group" "lambda" {
 # -----------------------------------------------------------------------------
 
 resource "aws_iam_role" "lambda_auth" {
-  name = "${var.project_name}-lambda-auth-${local.resource_suffix}"
+  name = "${var.project_name}-${var.environment}-lambda-auth-${local.resource_suffix}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -103,7 +105,7 @@ resource "aws_iam_role" "lambda_auth" {
   })
 
   tags = {
-    Name = "${var.project_name}-lambda-auth-role"
+    Name = "${var.project_name}-${var.environment}-lambda-auth-role"
   }
 }
 
@@ -122,11 +124,11 @@ resource "aws_iam_role_policy_attachment" "lambda_vpc" {
 # -----------------------------------------------------------------------------
 
 resource "aws_cloudwatch_log_group" "lambda_auth" {
-  name              = "/aws/lambda/${var.project_name}-auth-${local.resource_suffix}"
+  name              = "/aws/lambda/${var.project_name}-${var.environment}-auth-${local.resource_suffix}"
   retention_in_days = 30
 
   tags = {
-    Name = "${var.project_name}-lambda-auth-logs"
+    Name = "${var.project_name}-${var.environment}-lambda-auth-logs"
   }
 }
 
@@ -135,8 +137,8 @@ resource "aws_cloudwatch_log_group" "lambda_auth" {
 # -----------------------------------------------------------------------------
 
 resource "aws_lambda_function" "auth" {
-  function_name = "${var.project_name}-auth-${local.resource_suffix}"
-  description   = "CPF-based authentication for ${var.project_name}"
+  function_name = "${var.project_name}-${var.environment}-auth-${local.resource_suffix}"
+  description   = "CPF-based authentication for ${var.project_name} (${var.environment})"
   role          = aws_iam_role.lambda_auth.arn
   handler       = "handlers/auth-handler.handler"
   runtime       = "nodejs22.x"
@@ -172,7 +174,7 @@ resource "aws_lambda_function" "auth" {
   }
 
   tags = {
-    Name = "${var.project_name}-auth-lambda"
+    Name = "${var.project_name}-${var.environment}-auth-lambda"
   }
 
   depends_on = [
