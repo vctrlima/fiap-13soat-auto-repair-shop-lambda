@@ -80,7 +80,8 @@ export async function handler(
       },
       process.env.JWT_ACCESS_TOKEN_SECRET!,
       {
-        expiresIn: process.env.JWT_EXPIRES_IN || "15m",
+        expiresIn: (process.env.JWT_EXPIRES_IN ||
+          "15m") as jwt.SignOptions["expiresIn"],
         issuer: "auto-repair-shop-lambda",
       },
     );
