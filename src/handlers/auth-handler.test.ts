@@ -2,7 +2,7 @@ import type {
   APIGatewayProxyEventV2,
   APIGatewayProxyStructuredResultV2,
 } from "aws-lambda";
-import { handler } from "./auth-handler";
+import { handler, isValidCpf } from "./auth-handler";
 
 jest.mock("pg", () => {
   const mockQuery = jest.fn();
@@ -64,10 +64,30 @@ describe("auth-handler", () => {
     expect(JSON.parse(result.body as string).message).toContain("Invalid CPF");
   });
 
+  it("should return 400 when CPF has invalid check digits", async () => {
+    const event = createEvent({ cpf: "12345678900" });
+    const result = await callHandler(event);
+
+    expect(result.statusCode).toBe(400);
+    expect(JSON.parse(result.body as string).message).toContain(
+      "Check digits do not match",
+    );
+  });
+
+  it("should return 400 when CPF has all identical digits", async () => {
+    const event = createEvent({ cpf: "11111111111" });
+    const result = await callHandler(event);
+
+    expect(result.statusCode).toBe(400);
+    expect(JSON.parse(result.body as string).message).toContain(
+      "Check digits do not match",
+    );
+  });
+
   it("should return 404 when customer is not found", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
 
-    const event = createEvent({ cpf: "12345678901" });
+    const event = createEvent({ cpf: "52998224725" });
     const result = await callHandler(event);
 
     expect(result.statusCode).toBe(404);
@@ -83,12 +103,12 @@ describe("auth-handler", () => {
           id: "uuid-123",
           name: "John Doe",
           email: "john@example.com",
-          document: "12345678901",
+          document: "52998224725",
         },
       ],
     });
 
-    const event = createEvent({ cpf: "123.456.789-01" });
+    const event = createEvent({ cpf: "529.982.247-25" });
     const result = await callHandler(event);
 
     expect(result.statusCode).toBe(200);
@@ -100,9 +120,33 @@ describe("auth-handler", () => {
   it("should return 500 on unexpected error", async () => {
     mockQuery.mockRejectedValueOnce(new Error("DB connection failed"));
 
-    const event = createEvent({ cpf: "12345678901" });
+    const event = createEvent({ cpf: "52998224725" });
     const result = await callHandler(event);
 
     expect(result.statusCode).toBe(500);
+  });
+});
+
+describe("isValidCpf", () => {
+  it("should return true for valid CPFs", () => {
+    expect(isValidCpf("52998224725")).toBe(true);
+    expect(isValidCpf("11144477735")).toBe(true);
+    expect(isValidCpf("12345678909")).toBe(true);
+  });
+
+  it("should return false for CPFs with all identical digits", () => {
+    expect(isValidCpf("00000000000")).toBe(false);
+    expect(isValidCpf("11111111111")).toBe(false);
+    expect(isValidCpf("99999999999")).toBe(false);
+  });
+
+  it("should return false for CPFs with wrong check digits", () => {
+    expect(isValidCpf("12345678900")).toBe(false);
+    expect(isValidCpf("52998224726")).toBe(false);
+  });
+
+  it("should return false for CPFs with wrong length", () => {
+    expect(isValidCpf("1234567890")).toBe(false);
+    expect(isValidCpf("123456789012")).toBe(false);
   });
 });
