@@ -53,7 +53,7 @@ data "terraform_remote_state" "k8s" {
 
   config = {
     bucket = "auto-repair-shop-terraform-state"
-    key    = "k8s-infrastructure/terraform.tfstate"
+    key    = "fiap-13soat-auto-repair-shop-k8s-${var.environment}/terraform.tfstate"
     region = "us-east-2"
   }
 }

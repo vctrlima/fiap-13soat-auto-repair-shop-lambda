@@ -1,4 +1,7 @@
-import type { APIGatewayProxyEventV2 } from "aws-lambda";
+import type {
+  APIGatewayProxyEventV2,
+  APIGatewayProxyStructuredResultV2,
+} from "aws-lambda";
 import { handler } from "./auth-handler";
 
 jest.mock("pg", () => {
@@ -17,11 +20,17 @@ jest.mock("jsonwebtoken", () => ({
 
 const { __mockQuery: mockQuery } = jest.requireMock("pg");
 
+async function callHandler(
+  event: APIGatewayProxyEventV2,
+): Promise<APIGatewayProxyStructuredResultV2> {
+  return handler(event) as Promise<APIGatewayProxyStructuredResultV2>;
+}
+
 function createEvent(
   body: Record<string, unknown> | null,
 ): APIGatewayProxyEventV2 {
   return {
-    body: body ? JSON.stringify(body) : null,
+    body: body ? JSON.stringify(body) : undefined,
     headers: {},
     isBase64Encoded: false,
     rawPath: "/api/auth/cpf",
@@ -41,7 +50,7 @@ describe("auth-handler", () => {
 
   it("should return 400 when CPF is missing", async () => {
     const event = createEvent({});
-    const result = await handler(event);
+    const result = await callHandler(event);
 
     expect(result.statusCode).toBe(400);
     expect(JSON.parse(result.body as string).message).toBe("CPF is required");
@@ -49,7 +58,7 @@ describe("auth-handler", () => {
 
   it("should return 400 when CPF has invalid format", async () => {
     const event = createEvent({ cpf: "123" });
-    const result = await handler(event);
+    const result = await callHandler(event);
 
     expect(result.statusCode).toBe(400);
     expect(JSON.parse(result.body as string).message).toContain("Invalid CPF");
@@ -59,7 +68,7 @@ describe("auth-handler", () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
 
     const event = createEvent({ cpf: "12345678901" });
-    const result = await handler(event);
+    const result = await callHandler(event);
 
     expect(result.statusCode).toBe(404);
     expect(JSON.parse(result.body as string).message).toBe(
@@ -74,13 +83,13 @@ describe("auth-handler", () => {
           id: "uuid-123",
           name: "John Doe",
           email: "john@example.com",
-          cpf: "12345678901",
+          document: "12345678901",
         },
       ],
     });
 
     const event = createEvent({ cpf: "123.456.789-01" });
-    const result = await handler(event);
+    const result = await callHandler(event);
 
     expect(result.statusCode).toBe(200);
     const body = JSON.parse(result.body as string);
@@ -92,7 +101,7 @@ describe("auth-handler", () => {
     mockQuery.mockRejectedValueOnce(new Error("DB connection failed"));
 
     const event = createEvent({ cpf: "12345678901" });
-    const result = await handler(event);
+    const result = await callHandler(event);
 
     expect(result.statusCode).toBe(500);
   });
