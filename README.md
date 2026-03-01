@@ -7,6 +7,15 @@ AWS Lambda function for **customer authentication via CPF**. Receives a CPF numb
 
 ---
 
+## Deploy Links
+
+| Environment                    | URL                                                     |
+| ------------------------------ | ------------------------------------------------------- |
+| **Auth Endpoint (Production)** | `https://api.auto-repair-shop.com/api/auth/cpf`         |
+| **Auth Endpoint (Staging)**    | `https://staging-api.auto-repair-shop.com/api/auth/cpf` |
+
+---
+
 ## Table of Contents
 
 - [Purpose](#purpose)
@@ -16,6 +25,7 @@ AWS Lambda function for **customer authentication via CPF**. Receives a CPF numb
 - [Getting Started](#getting-started)
 - [API Contract](#api-contract)
 - [CI/CD & Deployment](#cicd--deployment)
+- [Documentation](#documentation)
 - [API Documentation](#api-documentation)
 - [Related Repositories](#related-repositories)
 
@@ -293,6 +303,26 @@ All workflows use **OIDC-based AWS credential assumption**.
 
 ---
 
+## Documentation
+
+- **Architecture Decision Records (ADRs)**: [`docs/adrs/`](docs/adrs/)
+  - [ADR-001: Estratégia de Autenticação com JWT via Lambda](docs/adrs/ADR-001-autenticacao-jwt-lambda.md)
+- **Request for Comments (RFCs)**: [`docs/rfcs/`](docs/rfcs/)
+  - [RFC-001: Estratégia de Autenticação e Autorização](docs/rfcs/RFC-001-estrategia-autenticacao.md)
+- **Sequence Diagram**: Included in this README ([Architecture](#architecture))
+- **API Contract**: Included in this README ([API Contract](#api-contract))
+
+### Branch Protection
+
+All repositories follow these branch protection rules (configured in GitHub):
+
+- **Branch `main`**: protected — no direct pushes allowed
+- **Merge via Pull Request only**: all changes require a PR with at least 1 approval
+- **CI must pass**: lint, tests, and Terraform validate must succeed before merge
+- **Automatic deploys**: staging (on push to `staging`), production (on push to `main`)
+
+---
+
 ## API Documentation
 
 This Lambda handles a single endpoint (`POST /api/auth/cpf`) routed by API Gateway. For the full API documentation including all other endpoints:
@@ -305,9 +335,9 @@ This Lambda handles a single endpoint (`POST /api/auth/cpf`) routed by API Gatew
 
 This project is part of the **Auto Repair Shop** ecosystem. Deploy in this order:
 
-| #   | Repository                                                                                            | Description                                     |
-| --- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| #   | Repository                                                                                         | Description                                     |
+| --- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
 | 1   | [`fiap-13soat-auto-repair-shop-k8s`](https://github.com/vctrlima/fiap-13soat-auto-repair-shop-k8s) | AWS infrastructure (VPC, EKS, ALB, API Gateway) |
-| 2   | **`fiap-13soat-auto-repair-shop-lambda`** (this repo)                                                 | CPF authentication Lambda function              |
+| 2   | **`fiap-13soat-auto-repair-shop-lambda`** (this repo)                                              | CPF authentication Lambda function              |
 | 3   | [`fiap-13soat-auto-repair-shop-db`](https://github.com/vctrlima/fiap-13soat-auto-repair-shop-db)   | Database infrastructure (RDS PostgreSQL)        |
 | 4   | [`fiap-13soat-auto-repair-shop-app`](https://github.com/vctrlima/fiap-13soat-auto-repair-shop-app) | Application API                                 |
