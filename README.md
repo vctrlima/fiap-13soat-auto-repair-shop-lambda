@@ -1,25 +1,116 @@
-# Lambda Infrastructure - CPF Authentication
+# Auto Repair Shop — Lambda (CPF Authentication)
 
-Terraform infrastructure and application code for the CPF-based authentication Lambda function used by the Auto Repair Shop project.
+AWS Lambda function for **customer authentication via CPF**. Receives a CPF number, looks up the customer in the RDS PostgreSQL database, and returns a signed JWT token. Invoked by the API Gateway provisioned in the [K8s Infrastructure](https://github.com/vctrlima/fiap-13soat-auto-repair-shop-k8s) repository.
+
+> **Part of the [Auto Repair Shop](https://github.com/fiap-13soat) ecosystem.**
+> Deploy order: K8s Infra → **Lambda (this repo)** → DB → App
+
+---
+
+## Table of Contents
+
+- [Purpose](#purpose)
+- [Architecture](#architecture)
+- [Technologies](#technologies)
+- [Project Structure](#project-structure)
+- [Getting Started](#getting-started)
+- [API Contract](#api-contract)
+- [CI/CD & Deployment](#cicd--deployment)
+- [API Documentation](#api-documentation)
+- [Related Repositories](#related-repositories)
+
+---
+
+## Purpose
+
+This Lambda function provides a **CPF-based authentication** flow for customers of the Auto Repair Shop:
+
+1. Receives a `POST /api/auth/cpf` request via API Gateway
+2. Sanitizes and validates the CPF (11 digits)
+3. Queries the `Customer` table in RDS PostgreSQL
+4. If found, generates a **JWT access token** with customer claims (id, name, email, cpf)
+5. Returns the token and customer info to the client
+
+This allows customers to authenticate using only their CPF document number, without needing a password.
+
+---
 
 ## Architecture
 
-This Lambda function handles customer authentication via CPF. It is invoked by the API Gateway (`POST /api/auth/cpf`) provisioned in the [K8s Infrastructure](https://github.com/fiap-13soat/fiap-13soat-auto-repair-shop-k8s) repository.
+```mermaid
+graph LR
+    Client([Client]) --> APIGW[API Gateway]
+    APIGW -- "POST /api/auth/cpf" --> Lambda[Lambda Function]
 
+    subgraph "VPC - Private Subnets"
+        Lambda --> RDS[(RDS PostgreSQL)]
+    end
+
+    Lambda -- "JWT Token" --> Client
+
+    style Lambda fill:#ff9900,stroke:#cc7a00,color:#fff
+    style RDS fill:#336791,stroke:#1a3d5c,color:#fff
+    style APIGW fill:#ff9900,stroke:#cc7a00,color:#fff
 ```
-API Gateway (K8s repo) → Lambda (this repo) → RDS PostgreSQL (DB repo)
+
+### How It Works
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant AG as API Gateway
+    participant L as Lambda
+    participant DB as PostgreSQL
+
+    C->>AG: POST /api/auth/cpf { cpf: "12345678901" }
+    AG->>L: Invoke (event)
+    L->>L: Validate CPF (11 digits)
+    L->>DB: SELECT FROM Customer WHERE document = $1
+    DB-->>L: Customer row
+    L->>L: Sign JWT (sub, name, email, cpf)
+    L-->>AG: { accessToken, customer }
+    AG-->>C: 200 OK
 ```
+
+### Infrastructure
+
+- **Runtime**: Node.js 22.x on AWS Lambda (256 MB, 30s timeout)
+- **Network**: VPC-attached in private subnets (same as RDS)
+- **Database**: Direct connection via `pg` (node-postgres) — no ORM
+- **Security**: Security Group restricts outbound to RDS port only
+- **Logging**: CloudWatch Log Group with configurable retention
+- **Cross-stack**: Reads VPC/subnet info from K8s Infrastructure remote state; exports function ARN/invoke ARN consumed by K8s Infrastructure
+
+---
+
+## Technologies
+
+| Technology         | Version | Purpose                           |
+| ------------------ | ------- | --------------------------------- |
+| **Node.js**        | 22      | Runtime                           |
+| **TypeScript**     | 5.7     | Language                          |
+| **AWS Lambda**     | —       | Serverless compute                |
+| **pg**             | —       | PostgreSQL client (node-postgres) |
+| **jsonwebtoken**   | —       | JWT token signing                 |
+| **Jest**           | 29      | Unit testing (with ts-jest)       |
+| **ESLint**         | 9       | Code linting (TypeScript-ESLint)  |
+| **Terraform**      | ≥ 1.5.0 | Infrastructure as Code            |
+| **AWS Provider**   | ~5.0    | Terraform AWS resource management |
+| **S3**             | —       | Terraform state backend           |
+| **DynamoDB**       | —       | Terraform state locking           |
+| **GitHub Actions** | —       | CI/CD pipelines                   |
+
+---
 
 ## Project Structure
 
 ```
-fiap-13soat-auto-repair-shop-lambda/
-├── .github/
-│   └── workflows/
-│       ├── ci.yml              # Lint, test, terraform validate on PRs
-│       └── cd.yml              # Build, deploy infra, deploy code on merge
+├── .github/workflows/
+│   ├── ci.yml                  # Lint, test, terraform validate on PRs
+│   ├── cd-staging.yml          # Deploy to staging on merge to main
+│   └── cd-production.yml       # Deploy to production (manual trigger)
 ├── terraform/
-│   ├── main.tf                 # Lambda resources + remote state
+│   ├── main.tf                 # Lambda, IAM, CloudWatch, SG + remote state
 │   ├── variables.tf            # Input variables
 │   ├── outputs.tf              # Exported values (consumed by K8s repo)
 │   ├── placeholder.zip         # Initial dummy deployment package
@@ -30,25 +121,28 @@ fiap-13soat-auto-repair-shop-lambda/
 │           └── terraform.tfvars
 ├── src/
 │   └── handlers/
-│       ├── auth-handler.ts     # Lambda handler
-│       └── auth-handler.test.ts
+│       ├── auth-handler.ts     # Lambda handler implementation
+│       └── auth-handler.test.ts # Unit tests
 ├── package.json
 ├── tsconfig.json
 ├── jest.config.js
-├── eslint.config.mjs
-└── README.md
+└── eslint.config.mjs
 ```
 
-## Prerequisites
+---
 
-- Node.js >= 22.x
-- Terraform >= 1.5.0
+## Getting Started
+
+### Prerequisites
+
+- Node.js ≥ 22
+- Terraform ≥ 1.5.0
 - AWS CLI configured with appropriate credentials
 - S3 bucket for state: `auto-repair-shop-terraform-state`
 - DynamoDB table for locking: `auto-repair-shop-terraform-locks`
-- K8s Infrastructure must be provisioned first (this project reads its Terraform remote state for VPC/subnet info)
+- **K8s Infrastructure already provisioned** (this project reads its VPC/subnet outputs via remote state)
 
-## Local Development
+### Local Development
 
 ```bash
 # Install dependencies
@@ -66,11 +160,11 @@ npm run test:coverage
 # Lint
 npm run lint
 
-# Create deployment package
+# Create deployment package (build + zip)
 npm run package
 ```
 
-## Terraform Usage
+### Terraform Commands
 
 ```bash
 cd terraform
@@ -88,7 +182,7 @@ terraform plan -var-file=environments/production/terraform.tfvars -out=tfplan
 terraform apply tfplan
 ```
 
-### Required Terraform Variables (via CI/CD secrets or `-var`)
+### Required Terraform Variables
 
 | Variable                  | Description           | Sensitive |
 | ------------------------- | --------------------- | --------- |
@@ -97,7 +191,7 @@ terraform apply tfplan
 | `db_password`             | Database password     | Yes       |
 | `jwt_access_token_secret` | JWT signing secret    | Yes       |
 
-## Key Outputs
+### Key Outputs
 
 | Output          | Description                      |
 | --------------- | -------------------------------- |
@@ -107,24 +201,113 @@ terraform apply tfplan
 
 These outputs are consumed by the K8s Infrastructure repository via `terraform_remote_state`.
 
-## Deployment
+---
 
-Deployed automatically via GitHub Actions:
+## API Contract
 
-- **CI** (`.github/workflows/ci.yml`): Runs on pull requests — lint, test, terraform validate
-- **CD** (`.github/workflows/cd.yml`): Runs on merge to `main` — build, deploy infra (terraform apply), deploy function code
+### `POST /api/auth/cpf`
 
-### Deploy Order
+Authenticates a customer by CPF document number.
 
-> **Important**: This Lambda infrastructure must be provisioned **before** the K8s infrastructure, since the K8s repo reads Lambda outputs via `terraform_remote_state`.
+**Request:**
+
+```json
+{
+  "cpf": "12345678901"
+}
+```
+
+**Success Response (200):**
+
+```json
+{
+  "accessToken": "eyJhbGciOiJIUzI1NiIs...",
+  "customer": {
+    "id": "uuid",
+    "name": "John Doe",
+    "email": "john@example.com"
+  }
+}
+```
+
+**Error Responses:**
+
+| Status | Body                                                      | Condition                 |
+| ------ | --------------------------------------------------------- | ------------------------- |
+| 400    | `{ "message": "CPF is required" }`                        | Missing CPF in body       |
+| 400    | `{ "message": "Invalid CPF format. Must be 11 digits." }` | CPF not 11 digits         |
+| 404    | `{ "message": "Customer not found" }`                     | No customer with that CPF |
+| 500    | `{ "message": "Internal server error" }`                  | Unexpected error          |
+
+**JWT Token Claims:**
+
+| Claim   | Description                     |
+| ------- | ------------------------------- |
+| `sub`   | Customer UUID                   |
+| `name`  | Customer name                   |
+| `email` | Customer email                  |
+| `cpf`   | Customer CPF document           |
+| `type`  | `"customer"`                    |
+| `iss`   | `https://auto-repair-shop.auth` |
+| `aud`   | `auto-repair-shop-api`          |
+| `exp`   | Configurable (default: 15min)   |
+
+---
+
+## CI/CD & Deployment
+
+### CI — Continuous Integration (`.github/workflows/ci.yml`)
+
+**Trigger:** Pull requests to any branch.
+
+| Step               | Description                 |
+| ------------------ | --------------------------- |
+| Lint               | ESLint code standards check |
+| Test               | Jest unit tests             |
+| Terraform Validate | Terraform config validation |
+
+### CD — Continuous Deployment
+
+| Workflow            | Trigger                | Environment |
+| ------------------- | ---------------------- | ----------- |
+| `cd-staging.yml`    | Push to `main`         | Staging     |
+| `cd-production.yml` | Manual / after staging | Production  |
+
+Each CD workflow:
+
+1. Builds TypeScript and creates zip artifact (`npm run package`)
+2. Runs Terraform apply (provisions/updates infrastructure)
+3. Uploads Lambda function code via AWS CLI
+
+All workflows use **OIDC-based AWS credential assumption**.
 
 ### Required GitHub Secrets
 
-| Secret                    | Description        |
-| ------------------------- | ------------------ |
-| `AWS_ACCESS_KEY_ID`       | AWS credentials    |
-| `AWS_SECRET_ACCESS_KEY`   | AWS credentials    |
-| `DB_HOST`                 | RDS hostname       |
-| `DB_USERNAME`             | Database username  |
-| `DB_PASSWORD`             | Database password  |
-| `JWT_ACCESS_TOKEN_SECRET` | JWT signing secret |
+| Secret                    | Description              |
+| ------------------------- | ------------------------ |
+| `AWS_ROLE_ARN`            | OIDC role for AWS access |
+| `DB_HOST`                 | RDS hostname             |
+| `DB_USERNAME`             | Database username        |
+| `DB_PASSWORD`             | Database password        |
+| `JWT_ACCESS_TOKEN_SECRET` | JWT signing secret       |
+
+---
+
+## API Documentation
+
+This Lambda handles a single endpoint (`POST /api/auth/cpf`) routed by API Gateway. For the full API documentation including all other endpoints:
+
+> **Swagger UI**: Available at `http://localhost:3000/docs` when running the [App](https://github.com/vctrlima/fiap-13soat-auto-repair-shop-app).
+
+---
+
+## Related Repositories
+
+This project is part of the **Auto Repair Shop** ecosystem. Deploy in this order:
+
+| #   | Repository                                                                                            | Description                                     |
+| --- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| 1   | [`fiap-13soat-auto-repair-shop-k8s`](https://github.com/vctrlima/fiap-13soat-auto-repair-shop-k8s) | AWS infrastructure (VPC, EKS, ALB, API Gateway) |
+| 2   | **`fiap-13soat-auto-repair-shop-lambda`** (this repo)                                                 | CPF authentication Lambda function              |
+| 3   | [`fiap-13soat-auto-repair-shop-db`](https://github.com/vctrlima/fiap-13soat-auto-repair-shop-db)   | Database infrastructure (RDS PostgreSQL)        |
+| 4   | [`fiap-13soat-auto-repair-shop-app`](https://github.com/vctrlima/fiap-13soat-auto-repair-shop-app) | Application API                                 |
