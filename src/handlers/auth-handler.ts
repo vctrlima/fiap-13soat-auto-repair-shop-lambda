@@ -20,7 +20,7 @@ interface Customer {
   id: string;
   name: string;
   email: string;
-  cpf: string;
+  document: string;
 }
 
 function formatResponse(
@@ -58,7 +58,7 @@ export async function handler(
     }
 
     const result = await pool.query<Customer>(
-      'SELECT id, name, email, cpf FROM customers WHERE cpf = $1 AND "deletedAt" IS NULL',
+      'SELECT id, name, email, document FROM "Customer" WHERE document = $1',
       [sanitizedCpf],
     );
 
@@ -75,14 +75,15 @@ export async function handler(
         sub: customer.id,
         name: customer.name,
         email: customer.email,
-        cpf: customer.cpf,
+        cpf: customer.document,
         type: "customer",
       },
       process.env.JWT_ACCESS_TOKEN_SECRET!,
       {
         expiresIn: (process.env.JWT_EXPIRES_IN ||
           "15m") as jwt.SignOptions["expiresIn"],
-        issuer: "auto-repair-shop-lambda",
+        issuer: "https://auto-repair-shop.auth",
+        audience: "auto-repair-shop-api",
       },
     );
 
