@@ -2,8 +2,8 @@ import type {
   APIGatewayProxyEventV2,
   APIGatewayProxyResultV2,
 } from "aws-lambda";
-import { Pool } from "pg";
 import jwt from "jsonwebtoken";
+import { Pool } from "pg";
 
 const pool = new Pool({
   host: process.env.DB_HOST,
@@ -11,7 +11,7 @@ const pool = new Pool({
   database: process.env.DB_NAME,
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
-  ssl: { rejectUnauthorized: false },
+  ssl: process.env.DB_SSL === "false" ? false : { rejectUnauthorized: false },
   max: 5,
   connectionTimeoutMillis: 10000,
 });
