@@ -65,7 +65,7 @@ data "terraform_remote_state" "k8s" {
 resource "aws_security_group" "lambda" {
   name_prefix = "${var.project_name}-${var.environment}-lambda-auth-"
   vpc_id      = data.terraform_remote_state.k8s.outputs.vpc_id
-  description = "Security group for ${var.environment} authentication Lambda function"
+  description = "Security group for ${var.environment} authentication Lambda function — VPC access to internal ALB"
 
   egress {
     from_port   = 0
@@ -157,11 +157,7 @@ resource "aws_lambda_function" "auth" {
 
   environment {
     variables = {
-      DB_HOST                 = var.db_host
-      DB_PORT                 = tostring(var.db_port)
-      DB_NAME                 = var.db_name
-      DB_USER                 = var.db_username
-      DB_PASSWORD             = var.db_password
+      CUSTOMER_SERVICE_URL    = var.customer_service_url
       JWT_ACCESS_TOKEN_SECRET = var.jwt_access_token_secret
       JWT_EXPIRES_IN          = "15m"
       NODE_ENV                = var.environment

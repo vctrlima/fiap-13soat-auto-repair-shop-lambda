@@ -1,6 +1,6 @@
 # Lambda — Autenticação por CPF
 
-> AWS Lambda que autentica clientes pelo CPF, consultando o banco PostgreSQL e retornando um JWT assinado. Invocada diretamente pelo API Gateway HTTP v2 sem passar pelo cluster EKS.
+> AWS Lambda que autentica clientes pelo CPF, consultando o Customer & Vehicle Service via HTTP e retornando um JWT assinado. Invocada diretamente pelo API Gateway HTTP v2 sem passar pelo cluster EKS.
 
 ## Sumário
 
@@ -24,7 +24,7 @@ A **Lambda de Autenticação CPF** é a porta de entrada do sistema para cliente
 
 1. **Recebe um CPF** via `POST /api/auth/cpf`
 2. **Valida o formato e os dígitos verificadores** (algoritmo brasileiro)
-3. **Consulta o banco `customer_vehicle_db`** (PostgreSQL RDS) pelo CPF
+3. **Consulta o Customer & Vehicle Service** via endpoint interno HTTP pelo CPF
 4. **Emite um JWT** com claims de identidade do cliente (nome, e-mail, CPF, tipo)
 
 ### Problema que Resolve
@@ -33,17 +33,17 @@ Em uma arquitetura com API Gateway + EKS, criar uma rota de autenticação dentr
 
 - Rota pública (`/api/auth/cpf`) sem JWT authorizer — isolada do restante da API
 - Execução sem container sempre rodando (cold start tolerável para autenticação)
-- Acesso direto ao banco via VPC private subnets (sem chamadas HTTP inter-serviço)
+- Chamada HTTP interna ao Customer & Vehicle Service via ALB (sem acesso direto ao banco)
 - Infra provisionada separadamente, com deploy independente
 
 ### Papel na Arquitetura
 
 | Papel                        | Descrição                                                       |
 | ---------------------------- | --------------------------------------------------------------- |
-| **Autenticador de clientes** | Única rota pública que emite JWT                                |
-| **Consumidor de dados**      | Lê tabela `Customer` do banco do Customer & Vehicle Service     |
-| **Dependência do K8s**       | Lê remote state Terraform do K8s para obter VPC/subnets         |
-| **Provedor de identidade**   | `function_arn` exportado para o K8s repo configurar API Gateway |
+| **Autenticador de clientes** | Única rota pública que emite JWT                                         |
+| **Consumidor de dados**      | Chama `GET /internal/customers/:document` do Customer & Vehicle Service  |
+| **Dependência do K8s**       | Lê remote state Terraform do K8s para obter VPC/subnets                  |
+| **Provedor de identidade**   | `function_arn` exportado para o K8s repo configurar API Gateway          |
 
 **Ordem de deploy**: K8s Infra → **Lambda (este repo)** → DB → Microserviços
 
@@ -73,29 +73,29 @@ terraform/
 
 | Decisão                                        | Justificativa                                                            | Trade-off                                                              |
 | ---------------------------------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
-| **Lambda serverless** (vs microserviço no EKS) | Rota pública esporádica; zero custo quando idle; sem gestão de container | Cold start de ~500ms na primeira chamada; limite de 29s no API Gateway |
-| **Sem framework** (Node.js puro)               | Minimiza bundle e cold start; autenticação é lógica simples              | Sem middleware, roteamento ou DI — tudo manual                         |
-| **Pool de conexões PostgreSQL**                | `pg.Pool` permite reutilizar conexões entre invocações warm              | Conexões abertas podem exceder `max_connections` sob alta carga        |
-| **VPC attachment**                             | Acesso privado ao RDS sem expor o banco publicamente                     | VPC aumenta cold start; requer subnets e security groups corretos      |
-| **Terraform remote state**                     | Lê VPC/subnet IDs do K8s infra sem hardcode                              | Dependência de deploy — K8s infra deve existir antes                   |
+| **Lambda serverless** (vs microserviço no EKS) | Rota pública esporádica; zero custo quando idle; sem gestão de container | Cold start de ~500ms na primeira chamada; limite de 29s no API Gateway     |
+| **Sem framework** (Node.js puro)               | Minimiza bundle e cold start; autenticação é lógica simples              | Sem middleware, roteamento ou DI — tudo manual                              |
+| **HTTP via `fetch` nativo**                    | Chama `GET /internal/customers/:document` no CVS; sem acoplamento de schema | Depende da disponibilidade do serviço; adiciona ~5ms de latência de rede |
+| **VPC attachment**                             | Acesso à rede interna do ALB sem expor o serviço publicamente            | VPC aumenta cold start; requer subnets e security groups corretos           |
+| **Terraform remote state**                     | Lê VPC/subnet IDs e DNS do ALB do K8s infra sem hardcode                 | Dependência de deploy — K8s infra deve existir antes                        |
 
 ---
 
 ## 3. Tecnologias Utilizadas
 
-| Tecnologia       | Versão | Propósito                   |
-| ---------------- | ------ | --------------------------- |
-| **Node.js**      | 22     | Runtime da Lambda           |
-| **TypeScript**   | 5.x    | Linguagem                   |
-| **pg**           | 8.x    | Driver PostgreSQL (sem ORM) |
-| **jsonwebtoken** | 9      | Emissão de JWT              |
-| **Terraform**    | ≥ 1.9  | Provisão da infra AWS       |
-| **Jest**         | 29     | Testes unitários            |
+| Tecnologia       | Versão | Propósito                               |
+| ---------------- | ------ | --------------------------------------- |
+| **Node.js**      | 22     | Runtime da Lambda                       |
+| **TypeScript**   | 5.x    | Linguagem                               |
+| **fetch** (nativo) | —    | HTTP client para o Customer & Vehicle Service |
+| **jsonwebtoken** | 9      | Emissão de JWT                          |
+| **Terraform**    | ≥ 1.9  | Provisão da infra AWS                   |
+| **Jest**         | 29     | Testes unitários                        |
 
 **Infraestrutura AWS:**
 
 - `aws_lambda_function` — runtime `nodejs22.x`, 256 MB, timeout 30s
-- `aws_security_group` — permite saída para RDS na porta 5432
+- `aws_security_group` — permite saída HTTP para o ALB interno (porta 80)
 - `aws_iam_role` — `AWSLambdaVPCAccessExecutionRole` + `AWSXrayWriteOnlyAccess`
 - `aws_cloudwatch_log_group` — retenção de 7 dias
 
@@ -111,9 +111,9 @@ terraform/
 
 ### Dependências de Runtime
 
-| Serviço                              | Tipo        | Descrição                           |
-| ------------------------------------ | ----------- | ----------------------------------- |
-| **PostgreSQL (customer_vehicle_db)** | TCP via VPC | SELECT por CPF na tabela `Customer` |
+| Serviço                              | Tipo         | Descrição                                              |
+| ------------------------------------ | ------------ | ------------------------------------------------------ |
+| **Customer & Vehicle Service**       | HTTP via VPC | `GET /internal/customers/:document` — busca por CPF    |
 
 ### Dependências de Deploy
 
@@ -161,8 +161,8 @@ Content-Type: application/json
 |---|---|
 | `400` | CPF com formato inválido |
 | `400` | CPF com dígitos verificadores incorretos |
-| `404` | CPF não encontrado no banco |
-| `500` | Erro de conexão com banco |
+| `404` | CPF não encontrado no Customer & Vehicle Service |
+| `500` | Erro na chamada HTTP ao Customer & Vehicle Service |
 
 ---
 
@@ -175,7 +175,7 @@ sequenceDiagram
     actor Client
     participant AGW as API Gateway HTTP v2
     participant Lambda as Lambda CPF Auth\n(VPC)
-    participant PG as PostgreSQL\ncustomer_vehicle_db
+    participant CVS as Customer & Vehicle Service\n(via ALB)
 
     Client->>AGW: POST /api/auth/cpf {cpf}
     Note over AGW: Rota pública — sem JWT authorizer
@@ -188,8 +188,8 @@ sequenceDiagram
         Lambda-->>AGW: 400 Bad Request
         AGW-->>Client: {error: "CPF inválido"}
     else CPF válido
-        Lambda->>PG: SELECT * FROM Customer WHERE document = $1
-        PG-->>Lambda: Customer row
+        Lambda->>CVS: GET /internal/customers/:document
+        CVS-->>Lambda: 200 Customer | 404 Not Found
         alt Cliente não encontrado
             Lambda-->>AGW: 404 Not Found
             AGW-->>Client: {error: "Cliente não encontrado"}
@@ -212,7 +212,7 @@ graph TD
 
     subgraph "Lambda Terraform"
         LF[aws_lambda_function\nnodejs22.x\n256MB / 30s]
-        SG[aws_security_group\negress: 5432 → RDS]
+        SG[aws_security_group\negress: 80 → ALB interno]
         IAM[aws_iam_role\nLambdaVPCAccess\nXRayWriteOnly]
         CW[aws_cloudwatch_log_group\n7 dias retention]
         LF --> SG
@@ -275,16 +275,11 @@ terraform apply -var-file="environments/staging/terraform.tfvars"
 
 ### Variáveis de Ambiente (Lambda)
 
-| Variável                  | Descrição                             | Obrigatório           |
-| ------------------------- | ------------------------------------- | --------------------- |
-| `DB_HOST`                 | Host do PostgreSQL (RDS endpoint)     | Sim                   |
-| `DB_PORT`                 | Porta PostgreSQL                      | Sim (default: `5432`) |
-| `DB_NAME`                 | Nome do banco (`customer_vehicle_db`) | Sim                   |
-| `DB_USER`                 | Usuário do banco                      | Sim                   |
-| `DB_PASSWORD`             | Senha do banco (via Secrets Manager)  | Sim                   |
-| `DB_SSL`                  | Habilitar SSL (`true` em produção)    | Não                   |
-| `JWT_ACCESS_TOKEN_SECRET` | Chave secreta para assinar JWT        | Sim                   |
-| `JWT_EXPIRES_IN`          | Duração do token                      | Não (default: `15m`)  |
+| Variável                  | Descrição                                                       | Obrigatório          |
+| ------------------------- | --------------------------------------------------------------- | -------------------- |
+| `CUSTOMER_SERVICE_URL`    | URL interna do Customer & Vehicle Service (ex.: `http://alb/internal`) | Sim           |
+| `JWT_ACCESS_TOKEN_SECRET` | Chave secreta para assinar JWT                                  | Sim                  |
+| `JWT_EXPIRES_IN`          | Duração do token                                                | Não (default: `15m`) |
 
 ---
 
@@ -295,11 +290,11 @@ terraform apply -var-file="environments/staging/terraform.tfvars"
 Lambdas dentro de VPC têm cold start mais lento (~500-1000ms adicionais) por precisar alocar ENIs. Para mitigar:
 
 - Use **Provisioned Concurrency** se latência P99 for crítica
-- O pool `pg.Pool` reutiliza conexões entre invocações warm, reduzindo latência subsequente
+- Invocações warm reutilizam o mesmo processo Node.js, beneficiando conexões HTTP keep-alive
 
-### Pool de Conexões e RDS
+### Dependência do Customer & Vehicle Service
 
-A Lambda usa `pg.Pool` com conexões persistentes entre invocações warm. Em cenários de alta concorrência Lambda, o número de conexões abertas pode ultrapassar `max_connections` do RDS. Monitore via CloudWatch e considere **RDS Proxy** para ambientes de alta carga.
+A Lambda chama o endpoint `GET /internal/customers/:document` via ALB interno. Este endpoint **não exige JWT** e está disponível apenas na rede interna da VPC. Se o Customer & Vehicle Service estiver indisponível, a Lambda retorna `500`. Monitore a disponibilidade do serviço via CloudWatch e configure alertas de erro na Lambda.
 
 ### Validação de CPF
 
@@ -307,7 +302,7 @@ A Lambda implementa a validação completa do algoritmo de dígitos verificadore
 
 ### Secrets Manager
 
-Em produção, `DB_PASSWORD` e `JWT_ACCESS_TOKEN_SECRET` devem ser injetados via AWS Secrets Manager (não como environment variables em texto plano). O Terraform provisiona o IAM com permissão de leitura.
+Em produção, `JWT_ACCESS_TOKEN_SECRET` deve ser injetado via AWS Secrets Manager (não como environment variable em texto plano). O Terraform provisiona o IAM com permissão de leitura. `CUSTOMER_SERVICE_URL` é derivado do DNS do ALB via Terraform remote state — não requer segredo.
 
 ### Deploy Order
 
@@ -337,7 +332,7 @@ A Lambda **deve ser deployed após o K8s Infra**, pois lê o remote state do Ter
 
 ### Testes
 
-- Testes unitários com Jest e mocks do `pg` e `jsonwebtoken`
+- Testes unitários com Jest e mock de `global.fetch` e `jsonwebtoken`
 - Cobertura mínima: 80%
 
 | Environment                    | URL                                                     |
@@ -368,7 +363,7 @@ This Lambda function provides a **CPF-based authentication** flow for customers 
 
 1. Receives a `POST /api/auth/cpf` request via API Gateway
 2. Sanitizes and validates the CPF (11 digits)
-3. Queries the `Customer` table in RDS PostgreSQL
+3. Queries the Customer & Vehicle Service via `GET /internal/customers/:document`
 4. If found, generates a **JWT access token** with customer claims (id, name, email, cpf)
 5. Returns the token and customer info to the client
 
@@ -384,13 +379,15 @@ graph LR
     APIGW -- "POST /api/auth/cpf" --> Lambda[Lambda Function]
 
     subgraph "VPC - Private Subnets"
-        Lambda --> RDS[(RDS PostgreSQL)]
+        Lambda --> ALB[ALB interno]
+        ALB --> CVS[Customer & Vehicle Service]
     end
 
     Lambda -- "JWT Token" --> Client
 
     style Lambda fill:#ff9900,stroke:#cc7a00,color:#fff
-    style RDS fill:#336791,stroke:#1a3d5c,color:#fff
+    style ALB fill:#e8860c,stroke:#b5650a,color:#fff
+    style CVS fill:#336791,stroke:#1a3d5c,color:#fff
     style APIGW fill:#ff9900,stroke:#cc7a00,color:#fff
 ```
 

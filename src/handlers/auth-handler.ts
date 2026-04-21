@@ -3,18 +3,6 @@ import type {
   APIGatewayProxyResultV2,
 } from "aws-lambda";
 import jwt from "jsonwebtoken";
-import { Pool } from "pg";
-
-const pool = new Pool({
-  host: process.env.DB_HOST,
-  port: Number(process.env.DB_PORT) || 5432,
-  database: process.env.DB_NAME,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  ssl: process.env.DB_SSL === "false" ? false : { rejectUnauthorized: false },
-  max: 5,
-  connectionTimeoutMillis: 10000,
-});
 
 interface Customer {
   id: string;
@@ -92,18 +80,20 @@ export async function handler(
       });
     }
 
-    const result = await pool.query<Customer>(
-      'SELECT id, name, email, document FROM "Customer" WHERE document = $1',
-      [sanitizedCpf],
-    );
+    const url = `${process.env.CUSTOMER_SERVICE_URL}/internal/customers/${sanitizedCpf}`;
+    const response = await fetch(url);
 
-    if (result.rows.length === 0) {
+    if (response.status === 404) {
       return formatResponse(404, {
         message: "Customer not found",
       });
     }
 
-    const customer = result.rows[0];
+    if (!response.ok) {
+      throw new Error(`Customer service error: ${response.status}`);
+    }
+
+    const customer = (await response.json()) as Customer;
 
     const accessToken = jwt.sign(
       {

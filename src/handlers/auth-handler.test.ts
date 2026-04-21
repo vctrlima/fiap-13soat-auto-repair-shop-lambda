@@ -4,21 +4,12 @@ import type {
 } from "aws-lambda";
 import { handler, isValidCpf } from "./auth-handler";
 
-jest.mock("pg", () => {
-  const mockQuery = jest.fn();
-  return {
-    Pool: jest.fn(() => ({
-      query: mockQuery,
-    })),
-    __mockQuery: mockQuery,
-  };
-});
-
 jest.mock("jsonwebtoken", () => ({
   sign: jest.fn(() => "mock-jwt-token"),
 }));
 
-const { __mockQuery: mockQuery } = jest.requireMock("pg");
+const mockFetch = jest.fn();
+global.fetch = mockFetch;
 
 async function callHandler(
   event: APIGatewayProxyEventV2,
@@ -46,6 +37,7 @@ describe("auth-handler", () => {
     jest.clearAllMocks();
     process.env.JWT_ACCESS_TOKEN_SECRET = "test-secret";
     process.env.JWT_EXPIRES_IN = "15m";
+    process.env.CUSTOMER_SERVICE_URL = "http://localhost:3001";
   });
 
   it("should return 400 when CPF is missing", async () => {
@@ -85,7 +77,7 @@ describe("auth-handler", () => {
   });
 
   it("should return 404 when customer is not found", async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [] });
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
 
     const event = createEvent({ cpf: "52998224725" });
     const result = await callHandler(event);
@@ -97,15 +89,16 @@ describe("auth-handler", () => {
   });
 
   it("should return 200 with token when customer is found", async () => {
-    mockQuery.mockResolvedValueOnce({
-      rows: [
-        {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
           id: "uuid-123",
           name: "John Doe",
           email: "john@example.com",
           document: "52998224725",
-        },
-      ],
+        }),
     });
 
     const event = createEvent({ cpf: "529.982.247-25" });
@@ -118,7 +111,7 @@ describe("auth-handler", () => {
   });
 
   it("should return 500 on unexpected error", async () => {
-    mockQuery.mockRejectedValueOnce(new Error("DB connection failed"));
+    mockFetch.mockRejectedValueOnce(new Error("Network error"));
 
     const event = createEvent({ cpf: "52998224725" });
     const result = await callHandler(event);

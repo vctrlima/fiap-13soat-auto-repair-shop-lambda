@@ -15,15 +15,13 @@
     "clean": "rm -rf dist lambda.zip"
   },
   "dependencies": {
-    "jsonwebtoken": "^9.0.2",
-    "pg": "^8.13.1"
+    "jsonwebtoken": "^9.0.2"
   },
   "devDependencies": {
     "@types/aws-lambda": "^8.10.145",
     "@types/jest": "^30.0.0",
     "@types/jsonwebtoken": "^9.0.7",
     "@types/node": "^22.10.0",
-    "@types/pg": "^8.11.10",
     "@typescript-eslint/eslint-plugin": "^8.16.0",
     "@typescript-eslint/parser": "^8.16.0",
     "eslint": "^9.15.0",

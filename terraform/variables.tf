@@ -26,41 +26,16 @@ variable "region" {
   default     = "us-east-1"
 }
 
-# --- Database ---
-variable "db_host" {
-  description = "RDS database hostname"
-  type        = string
-}
-
-variable "db_port" {
-  description = "RDS database port"
-  type        = number
-  default     = 5432
-}
-
-variable "db_name" {
-  description = "Name of the PostgreSQL database"
-  type        = string
-  default     = "auto_repair_shop"
-}
-
-variable "db_username" {
-  description = "Master username for the database"
-  type        = string
-  sensitive   = true
-}
-
-variable "db_password" {
-  description = "Master password for the database"
-  type        = string
-  sensitive   = true
-}
-
 # --- Auth ---
 variable "jwt_access_token_secret" {
   description = "Secret key for JWT access tokens"
   type        = string
   sensitive   = true
+}
+
+variable "customer_service_url" {
+  description = "Internal URL of the customer-vehicle-service (via ALB), e.g. http://alb-dns/internal"
+  type        = string
 }
 
 # --- Tags ---
