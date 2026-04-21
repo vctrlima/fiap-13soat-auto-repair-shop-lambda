@@ -1,13 +1,343 @@
-# Auto Repair Shop — Lambda (CPF Authentication)
+# Lambda — Autenticação por CPF
 
-AWS Lambda function for **customer authentication via CPF**. Receives a CPF number, looks up the customer in the RDS PostgreSQL database, and returns a signed JWT token. Invoked by the API Gateway provisioned in the [K8s Infrastructure](https://github.com/vctrlima/fiap-13soat-auto-repair-shop-k8s) repository.
+> AWS Lambda que autentica clientes pelo CPF, consultando o banco PostgreSQL e retornando um JWT assinado. Invocada diretamente pelo API Gateway HTTP v2 sem passar pelo cluster EKS.
 
-> **Part of the [Auto Repair Shop](https://github.com/fiap-13soat) ecosystem.**
-> Deploy order: K8s Infra → **Lambda (this repo)** → DB → App
+## Sumário
+
+- [1. Visão Geral](#1-visão-geral)
+- [2. Arquitetura](#2-arquitetura)
+- [3. Tecnologias Utilizadas](#3-tecnologias-utilizadas)
+- [4. Comunicação entre Serviços](#4-comunicação-entre-serviços)
+- [5. Diagramas](#5-diagramas)
+- [6. Execução e Setup](#6-execução-e-setup)
+- [7. Pontos de Atenção](#7-pontos-de-atenção)
+- [8. Boas Práticas e Padrões](#8-boas-práticas-e-padrões)
 
 ---
 
-## Deploy Links
+## 1. Visão Geral
+
+### Propósito
+
+A **Lambda de Autenticação CPF** é a porta de entrada do sistema para clientes. Ela:
+
+1. **Recebe um CPF** via `POST /api/auth/cpf`
+2. **Valida o formato e os dígitos verificadores** (algoritmo brasileiro)
+3. **Consulta o banco `customer_vehicle_db`** (PostgreSQL RDS) pelo CPF
+4. **Emite um JWT** com claims de identidade do cliente (nome, e-mail, CPF, tipo)
+
+### Problema que Resolve
+
+Em uma arquitetura com API Gateway + EKS, criar uma rota de autenticação dentro dos microserviços violaria a separação de responsabilidades. A Lambda resolve isso:
+
+- Rota pública (`/api/auth/cpf`) sem JWT authorizer — isolada do restante da API
+- Execução sem container sempre rodando (cold start tolerável para autenticação)
+- Acesso direto ao banco via VPC private subnets (sem chamadas HTTP inter-serviço)
+- Infra provisionada separadamente, com deploy independente
+
+### Papel na Arquitetura
+
+| Papel                        | Descrição                                                       |
+| ---------------------------- | --------------------------------------------------------------- |
+| **Autenticador de clientes** | Única rota pública que emite JWT                                |
+| **Consumidor de dados**      | Lê tabela `Customer` do banco do Customer & Vehicle Service     |
+| **Dependência do K8s**       | Lê remote state Terraform do K8s para obter VPC/subnets         |
+| **Provedor de identidade**   | `function_arn` exportado para o K8s repo configurar API Gateway |
+
+**Ordem de deploy**: K8s Infra → **Lambda (este repo)** → DB → Microserviços
+
+---
+
+## 2. Arquitetura
+
+### Estrutura do Projeto
+
+```
+src/
+└── handlers/
+    ├── auth.ts          # Handler principal — validação + DB + JWT
+    └── auth.test.ts     # Testes unitários com mocks
+terraform/
+├── main.tf              # Lambda function, Security Group, IAM role, CloudWatch
+├── variables.tf         # Inputs (VPC, subnets, DB credentials, JWT secret)
+├── outputs.tf           # function_arn, function_name, invoke_arn
+└── environments/
+    ├── staging/
+    │   └── terraform.tfvars
+    └── production/
+        └── terraform.tfvars
+```
+
+### Decisões Arquiteturais
+
+| Decisão                                        | Justificativa                                                            | Trade-off                                                              |
+| ---------------------------------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
+| **Lambda serverless** (vs microserviço no EKS) | Rota pública esporádica; zero custo quando idle; sem gestão de container | Cold start de ~500ms na primeira chamada; limite de 29s no API Gateway |
+| **Sem framework** (Node.js puro)               | Minimiza bundle e cold start; autenticação é lógica simples              | Sem middleware, roteamento ou DI — tudo manual                         |
+| **Pool de conexões PostgreSQL**                | `pg.Pool` permite reutilizar conexões entre invocações warm              | Conexões abertas podem exceder `max_connections` sob alta carga        |
+| **VPC attachment**                             | Acesso privado ao RDS sem expor o banco publicamente                     | VPC aumenta cold start; requer subnets e security groups corretos      |
+| **Terraform remote state**                     | Lê VPC/subnet IDs do K8s infra sem hardcode                              | Dependência de deploy — K8s infra deve existir antes                   |
+
+---
+
+## 3. Tecnologias Utilizadas
+
+| Tecnologia       | Versão | Propósito                   |
+| ---------------- | ------ | --------------------------- |
+| **Node.js**      | 22     | Runtime da Lambda           |
+| **TypeScript**   | 5.x    | Linguagem                   |
+| **pg**           | 8.x    | Driver PostgreSQL (sem ORM) |
+| **jsonwebtoken** | 9      | Emissão de JWT              |
+| **Terraform**    | ≥ 1.9  | Provisão da infra AWS       |
+| **Jest**         | 29     | Testes unitários            |
+
+**Infraestrutura AWS:**
+
+- `aws_lambda_function` — runtime `nodejs22.x`, 256 MB, timeout 30s
+- `aws_security_group` — permite saída para RDS na porta 5432
+- `aws_iam_role` — `AWSLambdaVPCAccessExecutionRole` + `AWSXrayWriteOnlyAccess`
+- `aws_cloudwatch_log_group` — retenção de 7 dias
+
+---
+
+## 4. Comunicação entre Serviços
+
+### Invocação
+
+| Origem                  | Tipo          | Descrição                                        |
+| ----------------------- | ------------- | ------------------------------------------------ |
+| **API Gateway HTTP v2** | Invoke Lambda | Rota pública `POST /api/auth/cpf` sem authorizer |
+
+### Dependências de Runtime
+
+| Serviço                              | Tipo        | Descrição                           |
+| ------------------------------------ | ----------- | ----------------------------------- |
+| **PostgreSQL (customer_vehicle_db)** | TCP via VPC | SELECT por CPF na tabela `Customer` |
+
+### Dependências de Deploy
+
+| Repositório                        | Tipo                   | Dado Consumido                            |
+| ---------------------------------- | ---------------------- | ----------------------------------------- |
+| `fiap-13soat-auto-repair-shop-k8s` | Terraform remote state | VPC ID, subnet IDs privadas               |
+| `fiap-13soat-auto-repair-shop-k8s` | Output consumidor      | `invoke_arn` exportado para o API Gateway |
+
+### Contrato da API
+
+**Request:**
+
+```json
+POST /api/auth/cpf
+Content-Type: application/json
+
+{ "cpf": "12345678901" }
+```
+
+**Response (200):**
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+}
+```
+
+**JWT Claims:**
+
+```json
+{
+  "sub": "uuid-do-cliente",
+  "name": "João Silva",
+  "email": "joao@exemplo.com",
+  "cpf": "12345678901",
+  "type": "customer",
+  "iss": "auto-repair-shop",
+  "aud": "auto-repair-shop-api",
+  "exp": 1234567890
+}
+```
+
+**Erros:**
+| Status | Cenário |
+|---|---|
+| `400` | CPF com formato inválido |
+| `400` | CPF com dígitos verificadores incorretos |
+| `404` | CPF não encontrado no banco |
+| `500` | Erro de conexão com banco |
+
+---
+
+## 5. Diagramas
+
+### Fluxo de Autenticação
+
+```mermaid
+sequenceDiagram
+    actor Client
+    participant AGW as API Gateway HTTP v2
+    participant Lambda as Lambda CPF Auth\n(VPC)
+    participant PG as PostgreSQL\ncustomer_vehicle_db
+
+    Client->>AGW: POST /api/auth/cpf {cpf}
+    Note over AGW: Rota pública — sem JWT authorizer
+    AGW->>Lambda: Invoke (APIGatewayProxyEventV2)
+
+    Lambda->>Lambda: Validar formato CPF (11 dígitos)
+    Lambda->>Lambda: Validar dígitos verificadores
+
+    alt CPF inválido
+        Lambda-->>AGW: 400 Bad Request
+        AGW-->>Client: {error: "CPF inválido"}
+    else CPF válido
+        Lambda->>PG: SELECT * FROM Customer WHERE document = $1
+        PG-->>Lambda: Customer row
+        alt Cliente não encontrado
+            Lambda-->>AGW: 404 Not Found
+            AGW-->>Client: {error: "Cliente não encontrado"}
+        else Cliente encontrado
+            Lambda->>Lambda: jwt.sign({sub, name, email, cpf, type})
+            Lambda-->>AGW: 200 OK {token}
+            AGW-->>Client: {token: "eyJ..."}
+        end
+    end
+```
+
+### Infraestrutura Terraform
+
+```mermaid
+graph TD
+    subgraph "K8s Infra (remote state)"
+        VPC[VPC ID]
+        Subnets[Private Subnet IDs]
+    end
+
+    subgraph "Lambda Terraform"
+        LF[aws_lambda_function\nnodejs22.x\n256MB / 30s]
+        SG[aws_security_group\negress: 5432 → RDS]
+        IAM[aws_iam_role\nLambdaVPCAccess\nXRayWriteOnly]
+        CW[aws_cloudwatch_log_group\n7 dias retention]
+        LF --> SG
+        LF --> IAM
+        LF --> CW
+    end
+
+    VPC --> LF
+    Subnets --> LF
+
+    subgraph "Outputs"
+        OUT[function_arn\nfunction_name\ninvoke_arn]
+    end
+
+    LF --> OUT
+    OUT -->|consumido por| KOUT[K8s API Gateway\nIntegration]
+```
+
+---
+
+## 6. Execução e Setup
+
+### Pré-requisitos
+
+- Node.js 22+, npm
+- AWS CLI configurado (ou credenciais via environment)
+- Terraform ≥ 1.9
+- PostgreSQL acessível (local ou via VPN para RDS)
+
+### Desenvolvimento Local
+
+```bash
+# Instalar dependências
+npm install
+
+# Build TypeScript
+npm run build
+
+# Rodar testes
+npm test
+
+# Com cobertura
+npm run test:coverage
+```
+
+### Deploy via Terraform
+
+```bash
+cd terraform
+
+# Inicializar (baixa providers e lê remote state)
+terraform init -backend-config="environments/staging/backend.tfvars"
+
+# Planejar
+terraform plan -var-file="environments/staging/terraform.tfvars"
+
+# Aplicar
+terraform apply -var-file="environments/staging/terraform.tfvars"
+```
+
+### Variáveis de Ambiente (Lambda)
+
+| Variável                  | Descrição                             | Obrigatório           |
+| ------------------------- | ------------------------------------- | --------------------- |
+| `DB_HOST`                 | Host do PostgreSQL (RDS endpoint)     | Sim                   |
+| `DB_PORT`                 | Porta PostgreSQL                      | Sim (default: `5432`) |
+| `DB_NAME`                 | Nome do banco (`customer_vehicle_db`) | Sim                   |
+| `DB_USER`                 | Usuário do banco                      | Sim                   |
+| `DB_PASSWORD`             | Senha do banco (via Secrets Manager)  | Sim                   |
+| `DB_SSL`                  | Habilitar SSL (`true` em produção)    | Não                   |
+| `JWT_ACCESS_TOKEN_SECRET` | Chave secreta para assinar JWT        | Sim                   |
+| `JWT_EXPIRES_IN`          | Duração do token                      | Não (default: `15m`)  |
+
+---
+
+## 7. Pontos de Atenção
+
+### Cold Start e VPC
+
+Lambdas dentro de VPC têm cold start mais lento (~500-1000ms adicionais) por precisar alocar ENIs. Para mitigar:
+
+- Use **Provisioned Concurrency** se latência P99 for crítica
+- O pool `pg.Pool` reutiliza conexões entre invocações warm, reduzindo latência subsequente
+
+### Pool de Conexões e RDS
+
+A Lambda usa `pg.Pool` com conexões persistentes entre invocações warm. Em cenários de alta concorrência Lambda, o número de conexões abertas pode ultrapassar `max_connections` do RDS. Monitore via CloudWatch e considere **RDS Proxy** para ambientes de alta carga.
+
+### Validação de CPF
+
+A Lambda implementa a validação completa do algoritmo de dígitos verificadores do CPF. CPFs com dígitos repetidos (ex.: `111.111.111-11`) são considerados inválidos. O Customer & Vehicle Service **não valida os dígitos** — a Lambda é o único ponto de validação completa.
+
+### Secrets Manager
+
+Em produção, `DB_PASSWORD` e `JWT_ACCESS_TOKEN_SECRET` devem ser injetados via AWS Secrets Manager (não como environment variables em texto plano). O Terraform provisiona o IAM com permissão de leitura.
+
+### Deploy Order
+
+A Lambda **deve ser deployed após o K8s Infra**, pois lê o remote state do Terraform para obter VPC/subnet IDs. O K8s Infra **deve ser deployed após a Lambda** para configurar a integração do API Gateway com o `invoke_arn` da Lambda. Use um pipeline CI/CD com dependência explícita.
+
+---
+
+## 8. Boas Práticas e Padrões
+
+### Segurança
+
+- CPF validado antes de qualquer query no banco — previne queries desnecessárias
+- Sem logging de CPF ou dados pessoais em texto plano (apenas hash ou primeiros/últimos dígitos)
+- JWT assina claims mínimos necessários (`sub`, `type`, `iss`, `aud`, `exp`)
+- Comunicação banco-Lambda via VPC private subnets (sem exposição pública)
+
+### Validação
+
+- Algoritmo de verificação de dígitos do CPF implementado em TypeScript puro
+- Rejeita CPFs com menos de 11 dígitos, com caracteres não numéricos e com dígitos repetidos
+
+### Observabilidade
+
+- CloudWatch Logs com retenção de 7 dias
+- AWS X-Ray habilitado para rastreamento de invocações
+- Métricas nativas Lambda: Duration, Errors, Throttles, ConcurrentExecutions
+
+### Testes
+
+- Testes unitários com Jest e mocks do `pg` e `jsonwebtoken`
+- Cobertura mínima: 80%
 
 | Environment                    | URL                                                     |
 | ------------------------------ | ------------------------------------------------------- |
