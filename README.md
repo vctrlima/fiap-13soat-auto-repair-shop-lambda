@@ -12,6 +12,7 @@
 - [6. Execução e Setup](#6-execução-e-setup)
 - [7. Pontos de Atenção](#7-pontos-de-atenção)
 - [8. Boas Práticas e Padrões](#8-boas-práticas-e-padrões)
+- [9. Repositórios Relacionados](#9-repositórios-relacionados)
 
 ---
 
@@ -653,21 +654,15 @@ All repositories follow these branch protection rules (configured in GitHub):
 
 ---
 
-## API Documentation
+## 9. Repositórios Relacionados
 
-This Lambda handles a single endpoint (`POST /api/auth/cpf`) routed by API Gateway. For the full API documentation including all other endpoints:
+Este repositório faz parte do ecossistema **Auto Repair Shop**. Abaixo estão os demais repositórios da arquitetura final:
 
-> **Swagger UI**: Available at `http://localhost:3000/docs` when running the [App](https://github.com/vctrlima/fiap-13soat-auto-repair-shop-app).
-
----
-
-## Related Repositories
-
-This project is part of the **Auto Repair Shop** ecosystem. Deploy in this order:
-
-| #   | Repository                                                                                         | Description                                     |
-| --- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| 1   | [`fiap-13soat-auto-repair-shop-k8s`](https://github.com/vctrlima/fiap-13soat-auto-repair-shop-k8s) | AWS infrastructure (VPC, EKS, ALB, API Gateway) |
-| 2   | **`fiap-13soat-auto-repair-shop-lambda`** (this repo)                                              | CPF authentication Lambda function              |
-| 3   | [`fiap-13soat-auto-repair-shop-db`](https://github.com/vctrlima/fiap-13soat-auto-repair-shop-db)   | Database infrastructure (RDS PostgreSQL)        |
-| 4   | [`fiap-13soat-auto-repair-shop-app`](https://github.com/vctrlima/fiap-13soat-auto-repair-shop-app) | Application API                                 |
+| Repositório                                                                                                                                | Descrição                                                       |
+| ------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
+| [fiap-13soat-auto-repair-shop-execution-service](https://github.com/vctrlima/fiap-13soat-auto-repair-shop-execution-service)               | Rastreamento de execução dos serviços e notificações por e-mail |
+| [fiap-13soat-auto-repair-shop-billing-service](https://github.com/vctrlima/fiap-13soat-auto-repair-shop-billing-service)                   | Geração de faturas e processamento de pagamentos                |
+| [fiap-13soat-auto-repair-shop-work-order-service](https://github.com/vctrlima/fiap-13soat-auto-repair-shop-work-order-service)             | Ordens de serviço e Saga Orchestrator                           |
+| [fiap-13soat-auto-repair-shop-customer-vehicle-service](https://github.com/vctrlima/fiap-13soat-auto-repair-shop-customer-vehicle-service) | Cadastro de clientes e veículos                                 |
+| [fiap-13soat-auto-repair-shop-k8s](https://github.com/vctrlima/fiap-13soat-auto-repair-shop-k8s)                                           | Infraestrutura AWS — VPC, EKS, ALB, API Gateway                 |
+| [fiap-13soat-auto-repair-shop-db](https://github.com/vctrlima/fiap-13soat-auto-repair-shop-db)                                             | Banco de dados RDS PostgreSQL e migrações Flyway                |
