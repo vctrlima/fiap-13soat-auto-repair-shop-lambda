@@ -118,6 +118,55 @@ describe("auth-handler", () => {
 
     expect(result.statusCode).toBe(500);
   });
+
+  it("should return 500 when customer service returns a non-404 error status", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 503 });
+
+    const event = createEvent({ cpf: "52998224725" });
+    const result = await callHandler(event);
+
+    expect(result.statusCode).toBe(500);
+  });
+
+  it("should return 400 when CPF has extra non-digit characters making it longer than 11 digits", async () => {
+    const event = createEvent({ cpf: "529.982.247-250" }); // 12 digits after sanitizing
+    const result = await callHandler(event);
+
+    expect(result.statusCode).toBe(400);
+    expect(JSON.parse(result.body as string).message).toContain(
+      "Invalid CPF format",
+    );
+  });
+
+  it("should return 200 when JWT_EXPIRES_IN env var is not set (falls back to 15m)", async () => {
+    delete process.env.JWT_EXPIRES_IN;
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          id: "uuid-456",
+          name: "Jane Doe",
+          email: "jane@example.com",
+          document: "52998224725",
+        }),
+    });
+
+    const event = createEvent({ cpf: "52998224725" });
+    const result = await callHandler(event);
+
+    expect(result.statusCode).toBe(200);
+    const body = JSON.parse(result.body as string);
+    expect(body.accessToken).toBe("mock-jwt-token");
+  });
+
+  it("should return 400 when body is null (no CPF provided)", async () => {
+    const event = createEvent(null);
+    const result = await callHandler(event);
+
+    expect(result.statusCode).toBe(400);
+    expect(JSON.parse(result.body as string).message).toBe("CPF is required");
+  });
 });
 
 describe("isValidCpf", () => {
@@ -141,5 +190,10 @@ describe("isValidCpf", () => {
   it("should return false for CPFs with wrong length", () => {
     expect(isValidCpf("1234567890")).toBe(false);
     expect(isValidCpf("123456789012")).toBe(false);
+  });
+
+  it("should return true for CPFs where check digit remainder maps 10 to 0", () => {
+    expect(isValidCpf("12345678909")).toBe(true);
+    expect(isValidCpf("60000000060")).toBe(true);
   });
 });
